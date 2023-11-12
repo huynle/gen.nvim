@@ -52,15 +52,20 @@ local function get_window_options()
 	}
 end
 
-M.command = "ssh amos docker exec ollama ollama run $model $prompt"
-M.model = "llama2"
+-- M.command = "ssh amos docker exec ollama ollama run $model $prompt"
+-- M.command = "ollama run $model $prompt"
+-- M.command = "sgpt --model $model --role empty $prompt"
+M.command = [[sgpt --model $model --role empty "$prompt"]]
+-- M.command = "docker exec -it ollama ollama run $model $prompt"
+-- M.model = "llama2"
+M.model = "mistral:instruct"
 
 M.exec = function(options)
 	local opts = vim.tbl_deep_extend("force", {
 		model = M.model,
 		command = M.command,
 	}, options)
-	-- pcall(io.popen, 'ollama serve > /dev/null 2>&1 &')
+	-- pcall(io.popen, "ollama serve > /dev/null 2>&1 &")
 	curr_buffer = vim.fn.bufnr("%")
 	local mode = opts.mode or vim.fn.mode()
 	if mode == "v" or mode == "V" then
@@ -111,11 +116,14 @@ M.exec = function(options)
 		})
 	end
 
-	prompt = vim.fn.shellescape(substitute_placeholders(prompt))
+	prompt = substitute_placeholders(prompt)
 	local extractor = substitute_placeholders(opts.extract)
-	local cmd = opts.command
-	cmd = string.gsub(cmd, "%$prompt", prompt)
-	cmd = string.gsub(cmd, "%$model", opts.model)
+	-- local cmd = opts.command
+	-- cmd = string.gsub(cmd, "%$prompt", prompt)
+	-- cmd = string.gsub(cmd, "%$model", opts.model)
+	-- cmd = string.gsub(cmd, "%`", "\\`")
+	local cmd = { "sgpt", "--model", opts.model, "--role", "empty", prompt }
+
 	if result_buffer then
 		vim.cmd("bd" .. result_buffer)
 	end
@@ -124,11 +132,17 @@ M.exec = function(options)
 	vim.api.nvim_buf_set_option(result_buffer, "filetype", "markdown")
 
 	local float_win = vim.api.nvim_open_win(result_buffer, true, win_opts)
-
 	local result_string = ""
 	local lines = {}
-	local job_id = vim.fn.jobstart(cmd, {
+	local job_id
+	job_id = vim.fn.jobstart(cmd, {
+		pty = true,
 		on_stdout = function(_, data, _)
+			-- window was closed, so cancel the job
+			if not vim.api.nvim_win_is_valid(float_win) then
+				vim.fn.jobstop(job_id)
+				return
+			end
 			result_string = result_string .. table.concat(data, "\n")
 			lines = vim.split(result_string, "\n", true)
 			vim.api.nvim_buf_set_lines(result_buffer, 0, -1, false, lines)
@@ -157,6 +171,7 @@ M.exec = function(options)
 				)
 				vim.cmd("bd " .. result_buffer)
 			end
+			print(string.format("Job %d finished with exit code %d", a, b))
 		end,
 	})
 	vim.keymap.set("n", "<esc>", function()
@@ -204,6 +219,9 @@ vim.api.nvim_create_user_command("Gen", function(arg)
 		return M.exec(p)
 	end
 	select_prompt(function(item)
+		if not item then
+			return
+		end
 		p = vim.tbl_deep_extend("force", { mode = mode }, M.prompts[item])
 		M.exec(p)
 	end)
